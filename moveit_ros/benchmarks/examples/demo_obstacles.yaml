@@ -30,3 +30,4 @@ benchmark_config:
         - name: stomp
           planners:
             - STOMP
+

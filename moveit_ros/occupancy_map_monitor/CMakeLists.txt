@@ -12,8 +12,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wno-pedantic)
 endif()
 
-# Finds Boost Components
-include(ConfigExtras.cmake)
+find_package(Boost REQUIRED thread)
 
 if(APPLE)
   find_package(X11 REQUIRED)
@@ -33,7 +32,12 @@ include_directories(SYSTEM
   ${X11_INCLUDE_DIR}
 )
 
-set(THIS_PACKAGE_INCLUDE_DEPENDS
+add_library(${MOVEIT_LIB_NAME} SHARED
+  src/occupancy_map_monitor.cpp
+  src/occupancy_map_updater.cpp
+)
+set_target_properties(${MOVEIT_LIB_NAME} PROPERTIES VERSION "${${PROJECT_NAME}_VERSION}")
+ament_target_dependencies(${MOVEIT_LIB_NAME}
   rclcpp
   moveit_core
   moveit_msgs
@@ -43,28 +47,35 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   Boost
 )
 
-add_library(${MOVEIT_LIB_NAME} SHARED
-  src/occupancy_map_monitor.cpp
-  src/occupancy_map_updater.cpp
-)
-set_target_properties(${MOVEIT_LIB_NAME} PROPERTIES VERSION "${${PROJECT_NAME}_VERSION}")
-ament_target_dependencies(${MOVEIT_LIB_NAME}
-  ${THIS_PACKAGE_INCLUDE_DEPENDS}
-)
-
 add_executable(moveit_ros_occupancy_map_server src/occupancy_map_server.cpp)
 ament_target_dependencies(moveit_ros_occupancy_map_server
-  ${THIS_PACKAGE_INCLUDE_DEPENDS}
+  rclcpp
+  moveit_core
+  moveit_msgs
+  pluginlib
+  octomap
+  geometric_shapes
+  Boost
 )
 target_link_libraries(moveit_ros_occupancy_map_server ${MOVEIT_LIB_NAME})
 
+ament_export_include_directories(include)
+ament_export_libraries(${MOVEIT_LIB_NAME})
+ament_export_dependencies(rclcpp)
+ament_export_dependencies(eigen3_cmake_module)
+ament_export_dependencies(moveit_core)
+ament_export_dependencies(moveit_msgs)
+ament_export_dependencies(pluginlib)
+ament_export_dependencies(octomap)
+ament_export_dependencies(geometric_shapes)
+ament_export_dependencies(Boost)
+
 install(
   TARGETS ${MOVEIT_LIB_NAME}
-  EXPORT export_${PROJECT_NAME}
+  EXPORT  ${MOVEIT_LIB_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin
-  INCLUDES DESTINATION include
 )
 
 install(TARGETS moveit_ros_occupancy_map_server
@@ -72,20 +83,4 @@ install(TARGETS moveit_ros_occupancy_map_server
 )
 install(DIRECTORY include/ DESTINATION include)
 
-ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS} eigen3_cmake_module)
-
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-
-  # These don't pass yet, disable them for now
-  set(ament_cmake_copyright_FOUND TRUE)
-  set(ament_cmake_cppcheck_FOUND TRUE)
-  set(ament_cmake_cpplint_FOUND TRUE)
-  set(ament_cmake_uncrustify_FOUND TRUE)
-
-  # Run all lint tests in package.xml except those listed above
-  ament_lint_auto_find_test_dependencies()
-endif()
-
-ament_package(CONFIG_EXTRAS ConfigExtras.cmake)
+ament_package()

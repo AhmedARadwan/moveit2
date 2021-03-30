@@ -38,7 +38,7 @@
  */
 
 #include <moveit_servo/servo_server.h>
-#include <moveit_servo/servo_parameters.h>
+#include <moveit_servo/servo_parameters.cpp>
 
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_servo.servo_server");
 
@@ -81,12 +81,10 @@ bool ServoServer::init()
       node_ptr, robot_description_name, tf_buffer_, "planning_scene_monitor");
 
   // Get the servo parameters
-  auto servo_parameters = moveit_servo::ServoParameters::makeServoParameters(node_ptr, LOGGER);
-  if (servo_parameters == nullptr)
-  {
-    RCLCPP_FATAL(LOGGER, "Failed to load the servo parameters");
-    performed_initialization = false;
-  }
+  auto servo_parameters = std::make_shared<moveit_servo::ServoParameters>();
+  performed_initialization &= moveit_servo::readParameters(servo_parameters, node_ptr, LOGGER);
+  if (!performed_initialization)
+    RCLCPP_ERROR(LOGGER, "Could not get parameters");
 
   // Start the planning scene monitor
   performed_initialization &= (planning_scene_monitor_->getPlanningScene() != nullptr);
@@ -99,22 +97,21 @@ bool ServoServer::init()
     planning_scene_monitor_->startSceneMonitor();
   }
   else
-  {
-    RCLCPP_FATAL(LOGGER, "Planning scene not configured");
-  }
+    RCLCPP_ERROR(LOGGER, "Planning scene not configured");
+
+  // Create Servo
+  servo_ = std::make_unique<moveit_servo::Servo>(node_ptr, servo_parameters, planning_scene_monitor_);
 
   // If we initialized properly, go ahead and start everything up
   if (performed_initialization)
   {
-    // Create Servo
-    servo_ = std::make_unique<moveit_servo::Servo>(node_ptr, servo_parameters, planning_scene_monitor_);
     is_initialized_ = true;
     servo_->start();
     return true;
   }
   else
   {
-    RCLCPP_FATAL(LOGGER, "Servo Service failed to initialize properly, not starting servoing");
+    RCLCPP_WARN(LOGGER, "Servo Service failed to initialize properly, not starting servoing");
     return false;
   }
 }

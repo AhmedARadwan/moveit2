@@ -37,7 +37,6 @@
 
 #include <joint_limits_interface/joint_limits.h>
 #include <map>
-#include <string>
 
 namespace pilz_industrial_motion_planner
 {

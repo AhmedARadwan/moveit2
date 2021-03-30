@@ -55,20 +55,19 @@ TEST_F(ServoFixture, ReachSingular)
   watchForStatus(moveit_servo::StatusCode::DECELERATE_FOR_SINGULARITY);
 
   // Publish some twist commands that will bring us to singularity
-  rclcpp::Rate publish_loop_rate(test_parameters_->publish_hz);
   auto log_time_start = node_->now();
   size_t iterations = 0;
-  while (!sawTrackedStatus() && iterations++ < test_parameters_->timeout_iterations)
+  while (!sawTrackedStatus() && iterations++ < TIMEOUT_ITERATIONS)
   {
     auto msg = std::make_unique<geometry_msgs::msg::TwistStamped>();
     msg->header.stamp = node_->now();
     msg->twist.linear.x = 0.8;
     pub_twist_cmd_->publish(std::move(msg));
-    publish_loop_rate.sleep();
+    publish_loop_rate_.sleep();
   }
 
   // Test that we didn't timeout
-  EXPECT_LT(iterations, test_parameters_->timeout_iterations);
+  EXPECT_LT(iterations, TIMEOUT_ITERATIONS);
   auto log_time_end = node_->now();
   RCLCPP_INFO_STREAM(LOGGER, "Wait for singularity: " << (log_time_end - log_time_start).seconds());
 
@@ -79,19 +78,19 @@ TEST_F(ServoFixture, ReachSingular)
   // If we move the other way (away from singular), we should get no warnings
   log_time_start = node_->now();
   iterations = 0;
-  while (!sawTrackedStatus() && iterations++ < test_parameters_->timeout_iterations)
+  while (!sawTrackedStatus() && iterations++ < TIMEOUT_ITERATIONS)
   {
     auto msg = std::make_unique<geometry_msgs::msg::TwistStamped>();
     msg->header.stamp = node_->now();
     msg->twist.linear.x = -0.1;
     msg->twist.angular.z = -0.5;
     pub_twist_cmd_->publish(std::move(msg));
-    publish_loop_rate.sleep();
+    publish_loop_rate_.sleep();
   }
   EXPECT_EQ(getLatestStatus(), moveit_servo::StatusCode::NO_WARNING);
 
   // Test that we didn't timeout
-  EXPECT_LT(iterations, test_parameters_->timeout_iterations);
+  EXPECT_LT(iterations, TIMEOUT_ITERATIONS);
   log_time_end = node_->now();
   RCLCPP_INFO_STREAM(LOGGER, "Wait for no warning: " << (log_time_end - log_time_start).seconds());
 }

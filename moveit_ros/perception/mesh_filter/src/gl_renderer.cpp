@@ -48,11 +48,9 @@
 #include <stdexcept>
 #include <vector>
 #include <boost/thread.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <ros/console.h>
 
 using namespace std;
-
-static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit.ros.perception.gl_renderer");
 
 mesh_filter::GLRenderer::GLRenderer(unsigned width, unsigned height, float near, float far)
   : width_(width)
@@ -342,7 +340,7 @@ GLuint mesh_filter::GLRenderer::loadShaders(const string& vertex_source, const s
     glGetProgramInfoLog(program_id, info_log_length, nullptr, &program_error_message[0]);
     std::size_t l = strnlen(&program_error_message[0], program_error_message.size());
     if (l > 0)
-      RCLCPP_ERROR(LOGGER, "%s\n", &program_error_message[0]);
+      ROS_ERROR("%s\n", &program_error_message[0]);
   }
 
   if (vertex_shader_id)
@@ -360,10 +358,8 @@ bool mesh_filter::GLRenderer::glutInitialized_ = false;
 
 namespace
 {
-void nullDisplayFunction()
-{
+void nullDisplayFunction(){};
 }
-}  // namespace
 
 void mesh_filter::GLRenderer::createGLContext()
 {

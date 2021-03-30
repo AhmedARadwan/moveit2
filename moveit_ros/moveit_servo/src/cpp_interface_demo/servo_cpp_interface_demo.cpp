@@ -42,7 +42,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 // Servo
-#include <moveit_servo/servo_parameters.h>
+#include <moveit_servo/servo_parameters.cpp>
 #include <moveit_servo/servo.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 
@@ -79,14 +79,13 @@ public:
     twist_cmd_pub_ = node_->create_publisher<geometry_msgs::msg::TwistStamped>("servo_demo_node/delta_twist_cmds", 10);
   }
 
-  bool start()
+  void start()
   {
     // Get Servo Parameters
-    auto servo_parameters = moveit_servo::ServoParameters::makeServoParameters(node_, LOGGER);
-    if (!servo_parameters)
+    auto servo_parameters = std::make_shared<moveit_servo::ServoParameters>();
+    if (!moveit_servo::readParameters(servo_parameters, node_, LOGGER))
     {
-      RCLCPP_FATAL(LOGGER, "Failed to load the servo parameters");
-      return false;
+      RCLCPP_ERROR(LOGGER, "Could not get parameters");
     }
 
     // Create Servo and start it
@@ -94,7 +93,6 @@ public:
     servo_->start();
 
     timer_ = node_->create_wall_timer(50ms, std::bind(&ServoCppDemo::publishCommands, this));
-    return true;
   }
 
 private:
@@ -175,16 +173,11 @@ int main(int argc, char** argv)
   ps.world = psw;
 
   // Publish the collision object to the planning scene
-  auto scene_pub = node->create_publisher<moveit_msgs::msg::PlanningScene>("planning_scene", 10);
+  auto scene_pub = node->create_publisher<moveit_msgs::msg::PlanningScene>("/planning_scene", 10);
   scene_pub->publish(ps);
 
   // Start the Servo object, and start publishing commands to it
-  if (!demo.start())
-  {
-    RCLCPP_FATAL(LOGGER, "Failed to start");
-    rclcpp::shutdown();
-    return 1;
-  }
+  demo.start();
 
   // Spin
   auto executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();

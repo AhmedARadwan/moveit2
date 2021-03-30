@@ -39,9 +39,7 @@
 #pragma once
 
 // C++
-#include <condition_variable>
 #include <mutex>
-#include <thread>
 
 // ROS
 #include <rclcpp/rclcpp.hpp>
@@ -69,10 +67,13 @@ namespace moveit_servo
 class ServoCalcs
 {
 public:
-  ServoCalcs(rclcpp::Node::SharedPtr node, const std::shared_ptr<const moveit_servo::ServoParameters>& parameters,
+  ServoCalcs(rclcpp::Node::SharedPtr node, const ServoParametersPtr& parameters,
              const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor);
 
-  ~ServoCalcs();
+  ~ServoCalcs()
+  {
+    timer_->cancel();
+  }
 
   /** \brief Start the timer where we do work and publish outputs */
   void start();
@@ -100,15 +101,14 @@ public:
   /** \brief Pause or unpause processing servo commands while keeping the timers alive */
   void setPaused(bool paused);
 
+  /** \brief Change the controlled link. Often, this is the end effector
+   * This must be a link on the robot since MoveIt tracks the transform (not tf)
+   */
+  void changeRobotLinkCommandFrame(const std::string& new_command_frame);
+
 protected:
-  /** \brief Run the main calculation loop */
-  void mainCalcLoop();
-
-  /** \brief Do calculations for a single iteration. Publish one outgoing command */
-  void calculateSingleIteration();
-
-  /** \brief Stop the currently running thread */
-  void stop();
+  /** \brief Timer method */
+  void run();
 
   /** \brief Do servoing calculations for Cartesian twist commands. */
   bool cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
@@ -251,7 +251,7 @@ protected:
   std::shared_ptr<rclcpp::Node> node_;
 
   // Parameters from yaml
-  const std::shared_ptr<const moveit_servo::ServoParameters> parameters_;
+  ServoParametersPtr parameters_;
 
   // Pointer to the collision environment
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
@@ -291,6 +291,8 @@ protected:
   trajectory_msgs::msg::JointTrajectory::SharedPtr last_sent_command_;
 
   // ROS
+  rclcpp::TimerBase::SharedPtr timer_;
+  double period_;  // The loop period, in seconds
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr twist_stamped_sub_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_cmd_sub_;
@@ -303,13 +305,9 @@ protected:
   rclcpp::Service<moveit_msgs::srv::ChangeDriftDimensions>::SharedPtr drift_dimensions_server_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_servo_status_;
 
-  // Main tracking / result publisher loop
-  std::thread thread_;
-  bool stop_requested_;
-
   // Status
   StatusCode status_ = StatusCode::NO_WARNING;
-  std::atomic<bool> paused_;
+  bool paused_ = false;
   bool twist_command_is_stale_ = false;
   bool joint_command_is_stale_ = false;
   bool ok_to_publish_ = false;
@@ -329,8 +327,8 @@ protected:
   // The dimesions to control. In the command frame. [x, y, z, roll, pitch, yaw]
   std::array<bool, 6> control_dimensions_ = { { true, true, true, true, true, true } };
 
-  // main_loop_mutex_ is used to protect the input state and dynamic parameters
-  mutable std::mutex main_loop_mutex_;
+  // latest_state_mutex_ is used to protect the state below it
+  mutable std::mutex latest_state_mutex_;
   Eigen::Isometry3d tf_moveit_to_robot_cmd_frame_;
   Eigen::Isometry3d tf_moveit_to_ee_frame_;
   geometry_msgs::msg::TwistStamped::ConstSharedPtr latest_twist_stamped_;
@@ -339,13 +337,5 @@ protected:
   rclcpp::Time latest_joint_command_stamp_ = rclcpp::Time(0., RCL_ROS_TIME);
   bool latest_nonzero_twist_stamped_ = false;
   bool latest_nonzero_joint_cmd_ = false;
-
-  // input condition variable used for low latency mode
-  std::condition_variable input_cv_;
-  bool new_input_cmd_ = false;
-
-  // dynamic parameters
-  std::string robot_link_command_frame_;
-  rcl_interfaces::msg::SetParametersResult robotLinkCommandFrameCallback(const rclcpp::Parameter& parameter);
 };
 }  // namespace moveit_servo

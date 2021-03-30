@@ -35,12 +35,11 @@
 /* Author: Ioan Sucan */
 
 #include <moveit/lazy_free_space_updater/lazy_free_space_updater.h>
-#include <rclcpp/logging.hpp>
-#include <rclcpp/clock.hpp>
+#include <ros/console.h>
 
 namespace occupancy_map_monitor
 {
-static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit.ros.perception.lazy_free_space_updater");
+static const std::string LOGNAME = "lazy_free_space_updater";
 
 LazyFreeSpaceUpdater::LazyFreeSpaceUpdater(const OccMapTreePtr& tree, unsigned int max_batch_size)
   : tree_(tree)
@@ -72,8 +71,8 @@ LazyFreeSpaceUpdater::~LazyFreeSpaceUpdater()
 void LazyFreeSpaceUpdater::pushLazyUpdate(octomap::KeySet* occupied_cells, octomap::KeySet* model_cells,
                                           const octomap::point3d& sensor_origin)
 {
-  RCLCPP_DEBUG(LOGGER, "Pushing %lu occupied cells and %lu model cells for lazy updating...",
-               (long unsigned int)occupied_cells->size(), (long unsigned int)model_cells->size());
+  ROS_DEBUG_NAMED(LOGNAME, "Pushing %lu occupied cells and %lu model cells for lazy updating...",
+                  (long unsigned int)occupied_cells->size(), (long unsigned int)model_cells->size());
   boost::mutex::scoped_lock _(update_cell_sets_lock_);
   occupied_cells_sets_.push_back(occupied_cells);
   model_cells_sets_.push_back(model_cells);
@@ -97,7 +96,7 @@ void LazyFreeSpaceUpdater::pushBatchToProcess(OcTreeKeyCountMap* occupied_cells,
   }
   else
   {
-    RCLCPP_WARN(LOGGER, "Previous batch update did not complete. Ignoring set of cells to be freed.");
+    ROS_WARN_NAMED(LOGNAME, "Previous batch update did not complete. Ignoring set of cells to be freed.");
     delete occupied_cells;
     delete model_cells;
   }
@@ -123,13 +122,12 @@ void LazyFreeSpaceUpdater::processThread()
     if (!running_)
       break;
 
-    RCLCPP_DEBUG(LOGGER,
-                 "Begin processing batched update: marking free cells due to %lu occupied cells and %lu model cells",
-                 (long unsigned int)process_occupied_cells_set_->size(),
-                 (long unsigned int)process_model_cells_set_->size());
+    ROS_DEBUG_NAMED(LOGNAME,
+                    "Begin processing batched update: marking free cells due to %lu occupied cells and %lu model cells",
+                    (long unsigned int)process_occupied_cells_set_->size(),
+                    (long unsigned int)process_model_cells_set_->size());
 
-    rclcpp::Clock clock;
-    rclcpp::Time start = clock.now();
+    ros::WallTime start = ros::WallTime::now();
     tree_->lockRead();
 
 #pragma omp sections
@@ -166,7 +164,8 @@ void LazyFreeSpaceUpdater::processThread()
       free_cells1.erase(it);
       free_cells2.erase(it);
     }
-    RCLCPP_DEBUG(LOGGER, "Marking %lu cells as free...", (long unsigned int)(free_cells1.size() + free_cells2.size()));
+    ROS_DEBUG_NAMED(LOGNAME, "Marking %lu cells as free...",
+                    (long unsigned int)(free_cells1.size() + free_cells2.size()));
 
     tree_->lockWrite();
 
@@ -184,12 +183,12 @@ void LazyFreeSpaceUpdater::processThread()
     }
     catch (...)
     {
-      RCLCPP_ERROR(LOGGER, "Internal error while updating octree");
+      ROS_ERROR_NAMED(LOGNAME, "Internal error while updating octree");
     }
     tree_->unlockWrite();
     tree_->triggerUpdateCallback();
 
-    RCLCPP_DEBUG(LOGGER, "Marked free cells in %lf ms", (clock.now() - start).seconds() * 1000.0);
+    ROS_DEBUG_NAMED(LOGNAME, "Marked free cells in %lf ms", (ros::WallTime::now() - start).toSec() * 1000.0);
 
     delete process_occupied_cells_set_;
     process_occupied_cells_set_ = nullptr;
@@ -233,8 +232,8 @@ void LazyFreeSpaceUpdater::lazyUpdateThread()
     {
       if ((sensor_origins_.front() - sensor_origin).norm() > max_sensor_delta_)
       {
-        RCLCPP_DEBUG(LOGGER, "Pushing %u sets of occupied/model cells to free cells update thread (origin changed)",
-                     batch_size);
+        ROS_DEBUG_NAMED(LOGNAME, "Pushing %u sets of occupied/model cells to free cells update thread (origin changed)",
+                        batch_size);
         pushBatchToProcess(occupied_cells_set, model_cells_set, sensor_origin);
         batch_size = 0;
         break;
@@ -255,7 +254,7 @@ void LazyFreeSpaceUpdater::lazyUpdateThread()
 
     if (batch_size >= max_batch_size_)
     {
-      RCLCPP_DEBUG(LOGGER, "Pushing %u sets of occupied/model cells to free cells update thread", batch_size);
+      ROS_DEBUG_NAMED(LOGNAME, "Pushing %u sets of occupied/model cells to free cells update thread", batch_size);
       pushBatchToProcess(occupied_cells_set, model_cells_set, sensor_origin);
       occupied_cells_set = nullptr;
       batch_size = 0;

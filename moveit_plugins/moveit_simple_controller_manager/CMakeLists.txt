@@ -5,6 +5,7 @@ project(moveit_simple_controller_manager)
 find_package(moveit_common REQUIRED)
 moveit_package()
 
+find_package(Boost REQUIRED thread)
 find_package(ament_cmake REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -12,62 +13,36 @@ find_package(rclcpp REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 
-# Finds Boost Components
-include(ConfigExtras.cmake)
-
-set(THIS_PACKAGE_INCLUDE_DEPENDS
-  control_msgs
-  rclcpp
-  rclcpp_action
-  moveit_core
-  pluginlib
-)
-
-include_directories(
-  include
-)
+include_directories(include)
 
 add_library(${PROJECT_NAME} SHARED
   src/moveit_simple_controller_manager.cpp
   src/follow_joint_trajectory_controller_handle.cpp
 )
-
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION "${${PROJECT_NAME}_VERSION}")
-
 ament_target_dependencies(${PROJECT_NAME}
-  ${THIS_PACKAGE_INCLUDE_DEPENDS}
+  rclcpp
+  control_msgs
+  pluginlib
+  moveit_core
+  rclcpp_action
   Boost
 )
 
-install(
-  TARGETS ${PROJECT_NAME}
-  EXPORT export_${PROJECT_NAME}
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin
-  INCLUDES DESTINATION include
-)
+install(TARGETS ${PROJECT_NAME}
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin)
+
+
 install(DIRECTORY include/ DESTINATION include)
 
-ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(
-  ${THIS_PACKAGE_INCLUDE_DEPENDS}
-  Boost
-)
-
 pluginlib_export_plugin_description_file(moveit_core moveit_simple_controller_manager_plugin_description.xml)
-
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-
-  # These don't pass yet, disable them for now
-  set(ament_cmake_copyright_FOUND TRUE)
-  set(ament_cmake_cppcheck_FOUND TRUE)
-  set(ament_cmake_cpplint_FOUND TRUE)
-  set(ament_cmake_uncrustify_FOUND TRUE)
-
-  # Run all lint tests in package.xml except those listed above
-  ament_lint_auto_find_test_dependencies()
-endif()
-
-ament_package(CONFIG_EXTRAS ConfigExtras.cmake)
+ament_export_libraries(${PROJECT_NAME})
+ament_export_include_directories(include)
+ament_export_dependencies(pluginlib)
+ament_export_dependencies(moveit_core)
+ament_export_dependencies(rclcpp_action)
+ament_export_dependencies(control_msgs)
+ament_export_dependencies(Boost)
+ament_package()

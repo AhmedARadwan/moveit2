@@ -38,19 +38,14 @@
  */
 
 #include <cassert>
-#include <thread>
-#include <chrono>
-#include <mutex>
 
 #include <std_msgs/msg/bool.h>
 
 // #include <moveit_servo/make_shared_from_pool.h> // TODO(adamp): create an issue about this
 #include <moveit_servo/servo_calcs.h>
 
-using namespace std::chrono_literals;  // for s, ms, etc.
-
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_servo.servo_calcs");
-constexpr auto ROS_LOG_THROTTLE_PERIOD = std::chrono::nanoseconds(30ms).count();
+constexpr size_t ROS_LOG_THROTTLE_PERIOD = 30 * 1000;  // Milliseconds to throttle logs inside loops
 
 namespace moveit_servo
 {
@@ -88,21 +83,13 @@ geometry_msgs::msg::TransformStamped convertIsometryToTransform(const Eigen::Iso
 }  // namespace
 
 // Constructor for the class that handles servoing calculations
-ServoCalcs::ServoCalcs(rclcpp::Node::SharedPtr node,
-                       const std::shared_ptr<const moveit_servo::ServoParameters>& parameters,
+ServoCalcs::ServoCalcs(rclcpp::Node::SharedPtr node, const ServoParametersPtr& parameters,
                        const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor)
   : node_(node)
   , parameters_(parameters)
   , planning_scene_monitor_(planning_scene_monitor)
-  , stop_requested_(true)
-  , paused_(false)
-  , robot_link_command_frame_(parameters->robot_link_command_frame)
+  , period_(parameters->publish_period)
 {
-  // Register callback for changes in robot_link_command_frame
-  parameters_->registerSetParameterCallback(parameters->ns + ".robot_link_command_frame",
-                                            std::bind(&ServoCalcs::robotLinkCommandFrameCallback, this,
-                                                      std::placeholders::_1));
-
   // MoveIt Setup
   current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentState();
   joint_model_group_ = current_state_->getJointModelGroup(parameters_->move_group_name);
@@ -173,23 +160,15 @@ ServoCalcs::ServoCalcs(rclcpp::Node::SharedPtr node,
   tf_moveit_to_robot_cmd_frame_ = empty_matrix;
 }
 
-ServoCalcs::~ServoCalcs()
-{
-  stop();
-}
-
 void ServoCalcs::start()
 {
-  // Stop the thread if we are currently running
-  stop();
-
   // Set up the "last" published message, in case we need to send it first
   auto initial_joint_trajectory = std::make_unique<trajectory_msgs::msg::JointTrajectory>();
   initial_joint_trajectory->header.stamp = node_->now();
   initial_joint_trajectory->header.frame_id = parameters_->planning_frame;
   initial_joint_trajectory->joint_names = internal_joint_state_.name;
   trajectory_msgs::msg::JointTrajectoryPoint point;
-  point.time_from_start = rclcpp::Duration::from_seconds(parameters_->publish_period);
+  point.time_from_start = rclcpp::Duration(parameters_->publish_period);
   if (parameters_->publish_joint_positions)
     planning_scene_monitor_->getStateMonitor()->getCurrentState()->copyJointGroupPositions(joint_model_group_,
                                                                                            point.positions);
@@ -209,80 +188,17 @@ void ServoCalcs::start()
   initial_joint_trajectory->points.push_back(point);
   last_sent_command_ = std::move(initial_joint_trajectory);
 
+  // Set up timer for calculation callback
+  timer_ = node_->create_wall_timer(std::chrono::duration<double>(period_), std::bind(&ServoCalcs::run, this));
+
   current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentState();
   tf_moveit_to_ee_frame_ = current_state_->getGlobalLinkTransform(parameters_->planning_frame).inverse() *
                            current_state_->getGlobalLinkTransform(parameters_->ee_frame_name);
   tf_moveit_to_robot_cmd_frame_ = current_state_->getGlobalLinkTransform(parameters_->planning_frame).inverse() *
-                                  current_state_->getGlobalLinkTransform(robot_link_command_frame_);
-
-  stop_requested_ = false;
-  thread_ = std::thread([this] { mainCalcLoop(); });
-  new_input_cmd_ = false;
+                                  current_state_->getGlobalLinkTransform(parameters_->robot_link_command_frame);
 }
 
-void ServoCalcs::stop()
-{
-  // Request stop
-  stop_requested_ = true;
-
-  // Notify condition variable in case the thread is blocked on it
-  {
-    // scope so the mutex is unlocked after so the thread can continue
-    // and therefore be joinable
-    const std::lock_guard<std::mutex> lock(main_loop_mutex_);
-    new_input_cmd_ = false;
-    input_cv_.notify_all();
-  }
-
-  // Join the thread
-  if (thread_.joinable())
-  {
-    thread_.join();
-  }
-}
-
-void ServoCalcs::mainCalcLoop()
-{
-  rclcpp::Rate rate(1.0 / parameters_->publish_period);
-
-  while (rclcpp::ok() && !stop_requested_)
-  {
-    // lock the input state mutex
-    std::unique_lock<std::mutex> main_loop_lock(main_loop_mutex_);
-
-    // low latency mode -- begin calculations as soon as a new command is received.
-    if (parameters_->low_latency_mode)
-    {
-      input_cv_.wait(main_loop_lock, [this] { return (new_input_cmd_ || stop_requested_); });
-    }
-
-    // reset new_input_cmd_ flag
-    new_input_cmd_ = false;
-
-    // run servo calcs
-    const auto start_time = node_->now();
-    calculateSingleIteration();
-    const auto run_duration = node_->now() - start_time;
-
-    // Log warning when the run duration was longer than the period
-    if (run_duration.seconds() > parameters_->publish_period)
-    {
-      rclcpp::Clock& clock = *node_->get_clock();
-      RCLCPP_WARN_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD,
-                                  "run_duration: " << run_duration.seconds() << " (" << parameters_->publish_period
-                                                   << ")");
-    }
-
-    // normal mode, unlock input mutex and wait for the period of the loop
-    if (!parameters_->low_latency_mode)
-    {
-      main_loop_lock.unlock();
-      rate.sleep();
-    }
-  }
-}
-
-void ServoCalcs::calculateSingleIteration()
+void ServoCalcs::run()
 {
   // Publish status each loop iteration
   auto status_msg = std::make_unique<std_msgs::msg::Int8>();
@@ -303,27 +219,29 @@ void ServoCalcs::calculateSingleIteration()
 
   // Update from latest state
   current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentState();
+  {
+    const std::lock_guard<std::mutex> lock(latest_state_mutex_);
+    if (latest_twist_stamped_)
+      twist_stamped_cmd_ = *latest_twist_stamped_;
+    if (latest_joint_cmd_)
+      joint_servo_cmd_ = *latest_joint_cmd_;
 
-  if (latest_twist_stamped_)
-    twist_stamped_cmd_ = *latest_twist_stamped_;
-  if (latest_joint_cmd_)
-    joint_servo_cmd_ = *latest_joint_cmd_;
+    // Check for stale cmds
+    twist_command_is_stale_ = ((node_->now() - latest_twist_command_stamp_) >=
+                               rclcpp::Duration::from_seconds(parameters_->incoming_command_timeout));
+    joint_command_is_stale_ = ((node_->now() - latest_joint_command_stamp_) >=
+                               rclcpp::Duration::from_seconds(parameters_->incoming_command_timeout));
 
-  // Check for stale cmds
-  twist_command_is_stale_ = ((node_->now() - latest_twist_command_stamp_) >=
-                             rclcpp::Duration::from_seconds(parameters_->incoming_command_timeout));
-  joint_command_is_stale_ = ((node_->now() - latest_joint_command_stamp_) >=
-                             rclcpp::Duration::from_seconds(parameters_->incoming_command_timeout));
-
-  have_nonzero_twist_stamped_ = latest_nonzero_twist_stamped_;
-  have_nonzero_joint_command_ = latest_nonzero_joint_cmd_;
+    have_nonzero_twist_stamped_ = latest_nonzero_twist_stamped_;
+    have_nonzero_joint_command_ = latest_nonzero_joint_cmd_;
+  }
 
   // Get the transform from MoveIt planning frame to servoing command frame
   // Calculate this transform to ensure it is available via C++ API
   // We solve (planning_frame -> base -> robot_link_command_frame)
   // by computing (base->planning_frame)^-1 * (base->robot_link_command_frame)
   tf_moveit_to_robot_cmd_frame_ = current_state_->getGlobalLinkTransform(parameters_->planning_frame).inverse() *
-                                  current_state_->getGlobalLinkTransform(robot_link_command_frame_);
+                                  current_state_->getGlobalLinkTransform(parameters_->robot_link_command_frame);
 
   // Calculate the transform from MoveIt planning frame to End Effector frame
   // Calculate this transform to ensure it is available via C++ API
@@ -454,16 +372,6 @@ void ServoCalcs::calculateSingleIteration()
     resetLowPassFilters(original_joint_state_);
 }
 
-rcl_interfaces::msg::SetParametersResult ServoCalcs::robotLinkCommandFrameCallback(const rclcpp::Parameter& parameter)
-{
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
-  rcl_interfaces::msg::SetParametersResult result;
-  result.successful = true;
-  robot_link_command_frame_ = parameter.as_string();
-  RCLCPP_INFO(LOGGER, "robot_link_command_frame changed to: " + robot_link_command_frame_);
-  return result;
-};
-
 // Perform the servoing calculations
 bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
                                      trajectory_msgs::msg::JointTrajectory& joint_trajectory)
@@ -482,7 +390,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
     Eigen::Vector3d angular_vector(cmd.twist.angular.x, cmd.twist.angular.y, cmd.twist.angular.z);
 
     // If the incoming frame is empty or is the command frame, we use the previously calculated tf
-    if (cmd.header.frame_id.empty() || cmd.header.frame_id == robot_link_command_frame_)
+    if (cmd.header.frame_id.empty() || cmd.header.frame_id == parameters_->robot_link_command_frame)
     {
       translation_vector = tf_moveit_to_robot_cmd_frame_.linear() * translation_vector;
       angular_vector = tf_moveit_to_robot_cmd_frame_.linear() * angular_vector;
@@ -632,7 +540,7 @@ bool ServoCalcs::applyJointUpdate(const Eigen::ArrayXd& delta_theta, sensor_msgs
 
 // Spam several redundant points into the trajectory. The first few may be skipped if the
 // time stamp is in the past when it reaches the client. Needed for gazebo simulation.
-// Start from 1 because the first point's timestamp is already 1*parameters_->publish_period
+// Start from 2 because the first point's timestamp is already 1*parameters_->publish_period
 void ServoCalcs::insertRedundantPointsIntoTrajectory(trajectory_msgs::msg::JointTrajectory& joint_trajectory,
                                                      int count) const
 {
@@ -640,10 +548,10 @@ void ServoCalcs::insertRedundantPointsIntoTrajectory(trajectory_msgs::msg::Joint
     return;
   joint_trajectory.points.resize(count);
   auto point = joint_trajectory.points[0];
-  // Start from 1 because we already have the first point. End at count+1 so (total #) == count
-  for (int i = 1; i < count; ++i)
+  // Start from 2 because we already have the first point. End at count+1 so (total #) == count
+  for (int i = 2; i < count; ++i)
   {
-    point.time_from_start = rclcpp::Duration::from_seconds((i + 1) * parameters_->publish_period);
+    point.time_from_start = rclcpp::Duration(i * parameters_->publish_period);
     joint_trajectory.points[i] = point;
   }
 }
@@ -668,7 +576,7 @@ void ServoCalcs::composeJointTrajMessage(const sensor_msgs::msg::JointState& joi
   joint_trajectory.joint_names = joint_state.name;
 
   trajectory_msgs::msg::JointTrajectoryPoint point;
-  point.time_from_start = rclcpp::Duration::from_seconds(parameters_->publish_period);
+  point.time_from_start = rclcpp::Duration(parameters_->publish_period);
   if (parameters_->publish_joint_positions)
     point.positions = joint_state.position;
   if (parameters_->publish_joint_velocities)
@@ -1112,7 +1020,7 @@ void ServoCalcs::enforceControlDimensions(geometry_msgs::msg::TwistStamped& comm
 
 bool ServoCalcs::getCommandFrameTransform(Eigen::Isometry3d& transform)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(latest_state_mutex_);
   transform = tf_moveit_to_robot_cmd_frame_;
 
   // All zeros means the transform wasn't initialized, so return false
@@ -1121,21 +1029,21 @@ bool ServoCalcs::getCommandFrameTransform(Eigen::Isometry3d& transform)
 
 bool ServoCalcs::getCommandFrameTransform(geometry_msgs::msg::TransformStamped& transform)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(latest_state_mutex_);
   // All zeros means the transform wasn't initialized, so return false
   if (tf_moveit_to_robot_cmd_frame_.matrix().isZero(0))
   {
     return false;
   }
 
-  transform =
-      convertIsometryToTransform(tf_moveit_to_robot_cmd_frame_, parameters_->planning_frame, robot_link_command_frame_);
+  transform = convertIsometryToTransform(tf_moveit_to_robot_cmd_frame_, parameters_->planning_frame,
+                                         parameters_->robot_link_command_frame);
   return true;
 }
 
 bool ServoCalcs::getEEFrameTransform(Eigen::Isometry3d& transform)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(latest_state_mutex_);
   transform = tf_moveit_to_ee_frame_;
 
   // All zeros means the transform wasn't initialized, so return false
@@ -1144,7 +1052,7 @@ bool ServoCalcs::getEEFrameTransform(Eigen::Isometry3d& transform)
 
 bool ServoCalcs::getEEFrameTransform(geometry_msgs::msg::TransformStamped& transform)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(latest_state_mutex_);
   // All zeros means the transform wasn't initialized, so return false
   if (tf_moveit_to_ee_frame_.matrix().isZero(0))
   {
@@ -1158,30 +1066,22 @@ bool ServoCalcs::getEEFrameTransform(geometry_msgs::msg::TransformStamped& trans
 
 void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(latest_state_mutex_);
   latest_twist_stamped_ = msg;
   latest_nonzero_twist_stamped_ = isNonZero(*latest_twist_stamped_.get());
 
   if (msg.get()->header.stamp != rclcpp::Time(0.))
     latest_twist_command_stamp_ = msg.get()->header.stamp;
-
-  // notify that we have a new input
-  new_input_cmd_ = true;
-  input_cv_.notify_all();
 }
 
 void ServoCalcs::jointCmdCB(const control_msgs::msg::JointJog::SharedPtr msg)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(latest_state_mutex_);
   latest_joint_cmd_ = msg;
   latest_nonzero_joint_cmd_ = isNonZero(*latest_joint_cmd_.get());
 
   if (msg.get()->header.stamp != rclcpp::Time(0.))
     latest_joint_command_stamp_ = msg.get()->header.stamp;
-
-  // notify that we have a new input
-  new_input_cmd_ = true;
-  input_cv_.notify_all();
 }
 
 void ServoCalcs::collisionVelocityScaleCB(const std_msgs::msg::Float64::SharedPtr msg)
@@ -1225,6 +1125,11 @@ bool ServoCalcs::resetServoStatus(const std::shared_ptr<std_srvs::srv::Empty::Re
 void ServoCalcs::setPaused(bool paused)
 {
   paused_ = paused;
+}
+
+void ServoCalcs::changeRobotLinkCommandFrame(const std::string& new_command_frame)
+{
+  parameters_->robot_link_command_frame = new_command_frame;
 }
 
 }  // namespace moveit_servo

@@ -30,6 +30,12 @@ ament_target_dependencies(moveit_list_request_adapter_plugins
   pluginlib
 )
 
+install(TARGETS ${MOVEIT_LIB_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
 install(TARGETS moveit_list_request_adapter_plugins
   DESTINATION lib/${PROJECT_NAME}
 )

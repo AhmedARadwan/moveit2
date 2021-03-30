@@ -10,4 +10,5 @@ ament_target_dependencies(${MOVEIT_LIB_NAME}
   tf2_kdl
 )
 
+install(TARGETS ${MOVEIT_LIB_NAME} LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
