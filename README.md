@@ -6,12 +6,12 @@ The MoveIt Motion Planning Framework for **ROS 2**. For ROS 1, see [MoveIt 1](ht
 
 ## Continuous Integration Status
 
-[![Format](https://github.com/ros-planning/moveit2/actions/workflows/format.yml/badge.svg?branch=main)](https://github.com/ros-planning/moveit2/actions/workflows/format.yml?branch=main) [![BuildAndTest](https://github.com/ros-planning/moveit2/actions/workflows/industrial_ci_action.yml/badge.svg?branch=main)](https://github.com/ros-planning/moveit2/actions/workflows/industrial_ci_action.yml?branch=main) [![codecov](https://codecov.io/gh/ros-planning/moveit2/branch/main/graph/badge.svg?token=W7uHKcY0ly)](https://codecov.io/gh/ros-planning/moveit2)
+[![Build Status](https://travis-ci.com/ros-planning/moveit2.svg?branch=main)](https://travis-ci.com/ros-planning/moveit2)
 
 ## General MoveIt Documentation
 
 - [MoveIt Website](http://moveit.ros.org)
-- [Tutorials and Documentation](https://ros-planning.github.io/moveit_tutorials/)
+- [Tutorials and Documentation](http://moveit.ros.org/documentation/)
 - [How to Get Involved](http://moveit.ros.org/about/get_involved/)
 - [Future Release Dates](https://moveit.ros.org/#release-versions)
 

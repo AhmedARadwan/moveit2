@@ -1,7 +1,7 @@
 repositories:
   moveit2:
     type: git
-    url: https://github.com/AhmedARadwan/moveit2
+    url: https://github.com/ros-planning/moveit2
     version: main
   moveit_msgs:
     type: git
